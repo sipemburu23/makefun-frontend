@@ -1,424 +1,324 @@
-// The four surfaces: board, bounty page, leaderboard, profile.
-// Every view is built with DOM methods or escaped text — no innerHTML
-// from API data, so a bounty description can never inject markup.
-import { api, getCompetition, getLeaderboard, getProfile, listCompetitions, money, timeLeft, isOpen } from "./api.js";
+// Views: every surface is built with DOM methods and textContent, never
+// innerHTML from API data, so a bounty title or a handle can never inject
+// markup. Countdowns are plain spans updated in place by app.js.
 
 export function el(tag, cls, text) {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text != null) n.textContent = text;
-  return n;
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined && text !== null) node.textContent = text;
+  return node;
 }
 
-export function link(href, text, cls) {
-  const a = el("a", cls, text);
-  a.href = href;
-  return a;
+// The API sometimes answers an avatar as a path on make.fun itself
+// (/api/avatars/….webp). A bare path would resolve against this app's own
+// server and 404, so root it on make.fun; absolute URLs pass through.
+export function avatarUrl(src) {
+  if (!src) return "";
+  if (src.startsWith("/")) return "https://make.fun" + src;
+  return src;
 }
 
-function stateTag(c) {
-  const open = isOpen(c);
-  const end = new Date(c.deadline).getTime();
-  const soon = open && end - Date.now() < 24 * 3600 * 1000;
-  const tag = el("span", "tag " + (open ? (soon ? "soon" : "open") : "closed"));
-  tag.textContent = open ? (soon ? "Closing soon" : "Open") : "Closed";
-  return tag;
+export function money(n) {
+  if (n === null || n === undefined || n === "") return "—";
+  const v = Number(n);
+  if (!Number.isFinite(v)) return String(n);
+  const cents = Number.isInteger(v) ? 0 : 2;
+  return "$" + v.toLocaleString("en-US", { minimumFractionDigits: cents, maximumFractionDigits: 2 });
 }
 
-function deadlineLine(c) {
-  const wrap = el("span");
-  wrap.appendChild(el("span", null, "Ends "));
-  const t = el("time");
-  t.dateTime = c.deadline;
-  t.textContent = new Date(c.deadline).toLocaleString(undefined, {
-    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+export function fmtDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
   });
-  wrap.appendChild(t);
-  wrap.appendChild(el("span", null, " · "));
-  const left = el("b");
-  left.dataset.deadline = c.deadline;
-  left.textContent = timeLeft(c.deadline);
-  wrap.appendChild(left);
+}
+
+// "2d 4h 12m" until the deadline; past deadlines read "closed".
+export function timeLeftText(iso) {
+  if (!iso) return "—";
+  const ms = new Date(iso).getTime() - Date.now();
+  if (Number.isNaN(ms) || ms <= 0) return "closed";
+  const min = Math.floor(ms / 60000);
+  const d = Math.floor(min / 1440);
+  const h = Math.floor((min % 1440) / 60);
+  const m = min % 60;
+  if (d > 0) return d + "d " + h + "h";
+  if (h > 0) return h + "h " + String(m).padStart(2, "0") + "m";
+  return m + "m";
+}
+
+// A bounty still takes entries while its deadline is in the future, even
+// when its status still reads open after the results were published.
+export function isOpen(bounty) {
+  if (!bounty || !bounty.deadline) return false;
+  return new Date(bounty.deadline).getTime() > Date.now();
+}
+
+function countdownSpan(iso) {
+  const s = el("span", "time-left", timeLeftText(iso));
+  s.dataset.deadline = iso || "";
+  return s;
+}
+
+function metaRow(label, valueNode) {
+  const wrap = el("div", "meta");
+  wrap.append(el("span", null, label + ": "), valueNode);
   return wrap;
 }
 
-// Refresh only the countdown texts, every 30 s, without rebuilding views.
-export function startClock() {
-  setInterval(() => {
-    document.querySelectorAll("[data-deadline]").forEach((n) => {
-      n.textContent = timeLeft(n.dataset.deadline);
-    });
-  }, 30000);
+export function loadingView(text) {
+  const view = el("div", "loading", text || "Loading…");
+  return view;
 }
 
-function bountyCard(c) {
-  const card = el("article", "card");
-  const h = el("h3");
-  h.appendChild(link("#/bounty/" + c.slug, c.title));
-  card.appendChild(h);
-  card.appendChild(el("p", null, (c.description || "").split("\n")[0].slice(0, 140)));
-  const pot = el("div", "pot", money(c.potUsd != null ? c.potUsd : c.rewardAmount));
-  pot.appendChild(el("small", null, c.potUsd != null ? "live pot (reward + fees)" : "reward"));
-  card.appendChild(pot);
-  const meta = el("div", "meta");
-  meta.appendChild(stateTag(c));
-  meta.appendChild(deadlineLine(c));
-  meta.appendChild(el("span", null, (c.submissionCount ?? 0) + " entries"));
-  if (c.entryFeeUsd != null && parseFloat(c.entryFeeUsd) > 0) {
-    meta.appendChild(el("span", null, "Fee " + money(c.entryFeeUsd)));
-  }
-  card.appendChild(meta);
-  const row = el("div", "row");
-  row.appendChild(link("#/bounty/" + c.slug, "View bounty", "btn ghost"));
-  row.appendChild(link("#/bounty/" + c.slug + "/leaderboard", "Leaderboard"));
-  card.appendChild(row);
-  return card;
+export function errorView(message) {
+  const wrap = el("div", "error");
+  wrap.append(el("h1", null, "Something went wrong"));
+  wrap.append(el("p", null, message || "make.fun did not answer. Please try again."));
+  const back = el("a", null, "← Back to the board");
+  back.href = "#/";
+  wrap.append(back);
+  return wrap;
 }
 
-export async function boardView(root) {
-  const data = await listCompetitions();
-  root.replaceChildren();
-  const items = (data.items || []).slice();
-  const open = items.filter(isOpen);
-  const closed = items.filter((c) => !isOpen(c));
-  open.sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
-  closed.sort((a, b) => new Date(b.deadline) - new Date(a.deadline));
+// ---- Board: every live bounty, open ones first, soonest deadline first. ----
+export function boardView(data) {
+  const items = (data && data.items) || [];
+  const open = items.filter(isOpen).sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+  const closed = items.filter((b) => !isOpen(b)).sort((a, b) => new Date(b.deadline) - new Date(a.deadline));
+  const all = open.concat(closed);
+  const pot = open.reduce((sum, b) => sum + (Number(b.potUsd ?? b.rewardAmount) || 0), 0);
 
-  root.appendChild(el("h1", null, "Live bounties"));
-  root.appendChild(el("p", "sub", open.length + " open now · " + items.length + " listed · rewards in USDC on Solana. Pick one to see its rules, rewards and leaderboard."));
+  const wrap = el("div");
+  wrap.append(el("h1", null, "Bounty board"));
+  wrap.append(el("p", "sub", "Live bounties on make.fun — reward, live pot, entry fee, time left and entries."));
 
-  const bar = el("div", "toolbar");
-  const search = el("input");
-  search.type = "search";
-  search.placeholder = "Filter bounties…";
-  search.setAttribute("aria-label", "Filter bounties");
-  const sort = el("select");
-  sort.setAttribute("aria-label", "Sort bounties");
-  for (const [v, t] of [["deadline", "Soonest deadline"], ["reward", "Biggest reward"], ["entries", "Most entries"]]) {
-    const o = el("option", null, t);
-    o.value = v;
-    sort.appendChild(o);
-  }
-  const count = el("span", "count");
-  bar.append(search, sort, count);
-  root.appendChild(bar);
+  const stats = el("div", "stats");
+  const stat = (value, label) => {
+    const s = el("div", "stat");
+    s.append(el("b", null, value), el("span", null, label));
+    return s;
+  };
+  stats.append(
+    stat(String(open.length), "open now"),
+    stat(money(pot), "open pot"),
+    stat(String(items.length), "bounties listed"),
+  );
+  wrap.append(stats);
 
   const grid = el("div", "grid");
-  root.appendChild(grid);
-  let enriched = false;
-
-  function render(list) {
-    grid.replaceChildren();
-    list.forEach((c) => grid.appendChild(bountyCard(c)));
-    count.textContent = list.length + " shown";
-  }
-
-  function current() {
-    const q = search.value.trim().toLowerCase();
-    let list = open.filter((c) =>
-      !q || c.title.toLowerCase().includes(q) || (c.category || "").toLowerCase().includes(q));
-    if (sort.value === "reward") list = list.slice().sort((a, b) => (b.potUsd ?? b.rewardAmount) - (a.potUsd ?? a.rewardAmount));
-    else if (sort.value === "entries") list = list.slice().sort((a, b) => (b.submissionCount ?? 0) - (a.submissionCount ?? 0));
-    return list;
-  }
-
-  search.addEventListener("input", () => render(current()));
-  sort.addEventListener("change", () => render(current()));
-  render(current());
-
-  // Enrich the open rows with each bounty's live pot and entry fee.
-  // Detail calls run after the first paint, a few at a time, cached.
-  if (!enriched) {
-    enriched = true;
-    const queue = open.slice(0, 12);
-    for (let i = 0; i < queue.length; i += 3) {
-      const batch = queue.slice(i, i + 3);
-      await Promise.all(batch.map(async (c) => {
-        try {
-          const d = await getCompetition(c.slug);
-          c.potUsd = d.potUsd;
-          c.entryFeeUsd = d.entryFeeUsd;
-        } catch { /* keep the list values */ }
-      }));
-      render(current());
+  for (const b of all) {
+    const card = el("article", "card");
+    const h = el("h3");
+    const link = el("a", null, b.title || b.slug);
+    link.href = "#/bounty/" + b.slug;
+    h.append(link);
+    card.append(h);
+    if (b.category) card.append(el("span", "chip", b.category));
+    const meta = el("div", "meta");
+    const potEl = el("b", "pot", money(b.potUsd ?? b.rewardAmount));
+    meta.append(potEl);
+    if (b.entryFeeUsd !== null && b.entryFeeUsd !== undefined) {
+      meta.append(el("span", null, "fee " + money(b.entryFeeUsd)));
     }
+    meta.append(countdownSpan(b.deadline));
+    meta.append(el("span", null, (b.submissionCount ?? 0) + " entries"));
+    card.append(meta);
+    if (b.summary) card.append(el("p", null, b.summary));
+    grid.append(card);
   }
-
-  if (closed.length) {
-    root.appendChild(el("h2", null, "Recently closed"));
-    const cgrid = el("div", "grid");
-    closed.slice(0, 6).forEach((c) => cgrid.appendChild(bountyCard(c)));
-    root.appendChild(cgrid);
-  }
+  wrap.append(grid);
+  if (!all.length) wrap.append(el("p", "sub", "No bounties right now."));
+  return wrap;
 }
 
-// Tiny safe markdown for bounty descriptions: headings, bold, lists,
-// links (https only). HTML is escaped first, so nothing executes.
-export function renderMarkdown(root, md) {
-  const lines = (md || "").split("\n");
-  let list = null;
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) { list = null; continue; }
-    if (line.startsWith("## ")) {
-      list = null;
-      root.appendChild(el("h2", null, line.slice(3)));
-      continue;
-    }
-    if (line.startsWith("# ")) {
-      list = null;
-      root.appendChild(el("h2", null, line.slice(2)));
-      continue;
-    }
-    if (line.startsWith("- ") || line.startsWith("* ")) {
-      if (!list) { list = el("ul"); root.appendChild(list); }
-      list.appendChild(inline(line.slice(2), "li"));
-      continue;
-    }
-    list = null;
-    root.appendChild(inline(line, "p"));
-  }
-}
+// ---- Bounty page: summary, rules, rewards table, dates and status. ----
+export function bountyView(b) {
+  const wrap = el("div");
+  const chip = el("span", "chip " + (isOpen(b) ? "open" : "closed"), isOpen(b) ? "Open for entries" : "Closed");
+  wrap.append(chip);
+  wrap.append(el("h1", null, b.title || b.slug));
+  if (b.summary) wrap.append(el("p", "sub", b.summary));
 
-function inline(text, tag) {
-  const n = el(tag);
-  const re = /(\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g;
-  let last = 0;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) n.appendChild(document.createTextNode(text.slice(last, m.index)));
-    const part = m[0];
-    if (part.startsWith("**")) {
-      n.appendChild(el("strong", null, part.slice(2, -2)));
-    } else {
-      const close = part.indexOf("](");
-      const label = part.slice(1, close);
-      const href = part.slice(close + 2, -1);
-      if (/^https:\/\//.test(href)) {
-        const a = el("a", null, label);
-        a.href = href;
-        a.rel = "noopener";
-        n.appendChild(a);
-      } else {
-        n.appendChild(document.createTextNode(label));
-      }
-    }
-    last = m.index + part.length;
-  }
-  if (last < text.length) n.appendChild(document.createTextNode(text.slice(last)));
-  return n;
-}
+  const facts = el("div", "facts");
+  const fact = (label, valueNode) => {
+    const f = el("div", "fact");
+    f.append(el("span", null, label), valueNode);
+    return f;
+  };
+  facts.append(
+    fact("Live pot", el("b", "pot", money(b.potUsd ?? b.rewardAmount))),
+    fact("Reward", el("b", null, money(b.rewardAmount))),
+    fact("Entry fee", el("b", null, b.entryFeeUsd ? money(b.entryFeeUsd) : "Free")),
+    fact("Time left", timeLeftHolder(b.deadline)),
+    fact("Entries", el("b", null, String(b.submissionCount ?? 0))),
+    fact("Deadline", el("b", null, fmtDate(b.deadline))),
+  );
+  wrap.append(facts);
 
-export async function bountyView(root, slug) {
-  const c = await getCompetition(slug);
-  root.replaceChildren();
-  const head = el("div", "row");
-  head.appendChild(stateTag(c));
-  head.appendChild(el("span", "tag", c.category || ""));
-  for (const s of c.skills || []) head.appendChild(el("span", "tag", s));
-  root.appendChild(head);
-  root.appendChild(el("h1", null, c.title));
-  root.appendChild(el("p", "sub", "by " + (c.sponsor && c.sponsor.name ? c.sponsor.name : "make.fun") + " · published " + new Date(c.publishedAt || c.deadline).toLocaleDateString()));
+  const nav = el("p");
+  const lb = el("a", null, "View the leaderboard →");
+  lb.href = "#/bounty/" + b.slug + "/leaderboard";
+  nav.append(lb);
+  wrap.append(nav);
 
-  const kv = el("dl", "kv");
-  const pot = el("div");
-  pot.appendChild(el("dt", null, "Live pot"));
-  pot.appendChild(el("dd", null, money(c.potUsd != null ? c.potUsd : c.rewardAmount)));
-  kv.appendChild(pot);
-  const fee = el("div");
-  fee.appendChild(el("dt", null, "Entry fee"));
-  fee.appendChild(el("dd", null, c.entryFeeUsd != null ? money(c.entryFeeUsd) : "None"));
-  kv.appendChild(fee);
-  const dl = el("div");
-  dl.appendChild(el("dt", null, "Deadline"));
-  const dd = el("dd");
-  dd.appendChild(el("span", null, timeLeft(c.deadline)));
-  dl.appendChild(dd);
-  kv.appendChild(dl);
-  const en = el("div");
-  en.appendChild(el("dt", null, "Entries"));
-  en.appendChild(el("dd", null, String(c.submissionCount ?? 0)));
-  kv.appendChild(en);
-  root.appendChild(kv);
-
-  const row = el("div", "row");
-  row.appendChild(link("#/bounty/" + c.slug + "/leaderboard", "Leaderboard", "btn"));
-  row.appendChild(link("https://make.fun/bounty/" + c.slug, "Open on make.fun"));
-  root.appendChild(row);
-
-  const rewards = c.rewardsNow || [];
-  if (rewards.length) {
-    root.appendChild(el("h2", null, "Rewards — live pot split"));
+  const rewards = b.rewards || b.rewardsNow || null;
+  if (rewards && typeof rewards === "object") {
+    wrap.append(el("h2", null, "Rewards"));
     const table = el("table");
-    const thead = el("thead");
-    const tr = el("tr");
-    for (const h of ["Place", "Base", "Fee share", "Total now"]) {
-      tr.appendChild(el("th", h === "Place" ? null : "num", h));
+    const head = el("tr");
+    head.append(el("th", null, "Place"), el("th", "num", "Prize"));
+    table.append(head);
+    const places = Object.keys(rewards).sort((a, c) => Number(a) - Number(c));
+    for (const place of places) {
+      const row = el("tr");
+      row.append(el("td", null, placeLabel(place)), el("td", "num", money(rewards[place])));
+      table.append(row);
     }
-    thead.appendChild(tr);
-    table.appendChild(thead);
-    const tb = el("tbody");
-    for (const r of rewards) {
-      const rowEl = el("tr");
-      rowEl.appendChild(el("td", null, r.place === 1 ? "1st" : r.place === 2 ? "2nd" : r.place === 3 ? "3rd" : r.place + "th"));
-      rowEl.appendChild(el("td", "num", money(r.baseUsd)));
-      rowEl.appendChild(el("td", "num", money(r.feeShareUsd)));
-      rowEl.appendChild(el("td", "num", money(r.amountUsd)));
-      tb.appendChild(rowEl);
-    }
-    table.appendChild(tb);
-    root.appendChild(table);
-  } else if (c.rewards) {
-    root.appendChild(el("h2", null, "Rewards"));
-    const table = el("table");
-    const thead = el("thead");
-    const tr = el("tr");
-    tr.appendChild(el("th", null, "Place"));
-    tr.appendChild(el("th", "num", "Reward"));
-    thead.appendChild(tr);
-    table.appendChild(thead);
-    const tb = el("tbody");
-    for (const [place, amount] of Object.entries(c.rewards)) {
-      const rowEl = el("tr");
-      rowEl.appendChild(el("td", null, place));
-      rowEl.appendChild(el("td", "num", money(amount)));
-      tb.appendChild(rowEl);
-    }
-    table.appendChild(tb);
-    root.appendChild(table);
+    wrap.append(table);
   }
 
-  const desc = el("div", "desc");
-  root.appendChild(el("h2", null, "About this bounty"));
-  renderMarkdown(desc, c.description || "");
-  root.appendChild(desc);
-  const dates = el("p", "sub", "Opens " + new Date(c.opensAt || c.publishedAt || c.deadline).toLocaleString() + " · closes " + new Date(c.deadline).toLocaleString() + " · status " + (c.status || "—"));
-  root.appendChild(dates);
+  if (b.description) {
+    wrap.append(el("h2", null, "Rules"));
+    // The description is markdown from the API; show it as plain text so
+    // no markup in it can run. Trimmed to keep the page readable.
+    wrap.append(el("div", "desc", b.description.slice(0, 4000)));
+  }
+  wrap.append(el("p", "sub", "Status: " + (b.status || "—") + " · Published " + fmtDate(b.publishedAt)));
+  return wrap;
 }
 
-function fmtValue(key, entry) {
-  const v = entry.values ? entry.values[key] : undefined;
-  const d = entry.display ? entry.display[key] : undefined;
-  if (v == null) return d != null ? String(d) : "—";
-  if (key === "bytes") return (v / 1024).toFixed(1) + " KB";
-  if (key === "valid") return v ? "✓" : "—";
-  if (/judge|rate|score/.test(key)) return (v / 1000000 * 100).toFixed(2) + "%";
-  return d != null ? String(d) : String(v);
+function timeLeftHolder(iso) {
+  const holder = el("b");
+  holder.append(countdownSpan(iso));
+  return holder;
 }
 
-export async function leaderboardView(root, slug) {
-  const lb = await getLeaderboard(slug);
-  root.replaceChildren();
-  const comp = lb.competition || {};
-  root.appendChild(el("h1", null, (comp.title || slug) + " — leaderboard"));
-  root.appendChild(el("p", "sub", "Phase: " + ((lb.phase && lb.phase.title) || "—") + " · " + (lb.entries ? lb.entries.length : 0) + " ranked entries. Win rates are the judge's share of wins."));
-  const row = el("div", "row");
-  row.appendChild(link("#/bounty/" + slug, "Back to bounty", "btn ghost"));
-  root.appendChild(row);
-  const cols = (lb.columns || []).filter((c) => !c.hidden);
-  const entries = lb.entries || [];
+function placeLabel(place) {
+  const n = Number(place);
+  if (!Number.isFinite(n)) return place;
+  const suffix = n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th";
+  return n + suffix;
+}
+
+// ---- Leaderboard: ranked entries, win rate and dossier size. ----
+export function leaderboardView(slug, data) {
+  const entries = (data && data.entries) || [];
+  const comp = (data && data.competition) || {};
+  const wrap = el("div");
+  wrap.append(el("h1", null, (comp.title || slug) + " — leaderboard"));
+  wrap.append(el("p", "sub", entries.length + " ranked entries · judge win rate, with dossier size as the tie-break."));
+
+  const back = el("p");
+  const bl = el("a", null, "← Back to the bounty");
+  bl.href = "#/bounty/" + slug;
+  back.append(bl);
+  wrap.append(back);
+
   if (!entries.length) {
-    root.appendChild(el("p", "loading", "No ranked entries yet for this bounty."));
-    return;
+    wrap.append(el("p", "sub", "No ranked entries yet."));
+    return wrap;
   }
   const table = el("table");
-  const thead = el("thead");
-  const tr = el("tr");
-  tr.appendChild(el("th", null, "#"));
-  tr.appendChild(el("th", null, "Entrant"));
-  tr.appendChild(el("th", null, "Entry"));
-  for (const col of cols) tr.appendChild(el("th", "num", col.title));
-  thead.appendChild(tr);
-  table.appendChild(thead);
-  const tb = el("tbody");
-  for (const e of entries.slice(0, 50)) {
-    const r = el("tr");
-    r.appendChild(el("td", null, String(e.rank ?? "—")));
+  const head = el("tr");
+  head.append(
+    el("th", null, "#"),
+    el("th", null, "Entrant"),
+    el("th", "num", "Win rate"),
+    el("th", "num", "Size"),
+  );
+  table.append(head);
+  for (const row of entries) {
+    const tr = el("tr");
+    tr.append(el("td", null, String(row.rank ?? "—")));
     const who = el("td");
-    who.appendChild(link("#/profile/" + e.handle, e.handle || "—"));
-    r.appendChild(who);
-    const what = el("td");
-    if (e.image) {
+    const whoWrap = el("div", "who");
+    if (row.image) {
       const img = document.createElement("img");
-      // Entry images may be API-relative (/api/avatars/…): resolve them
-      // against make.fun, never against this app's own server.
-      img.src = e.image.startsWith("http") ? e.image : "https://make.fun" + e.image;
+      img.setAttribute("crossorigin", "anonymous");
+      img.src = avatarUrl(row.image);
       img.alt = "";
-      img.crossOrigin = "anonymous";
-      img.style.cssText = "width:28px;height:28px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:8px";
-      what.appendChild(img);
+      img.loading = "lazy";
+      img.onerror = () => img.remove();
+      whoWrap.append(img);
     }
-    what.appendChild(document.createTextNode(e.title || ""));
-    r.appendChild(what);
-    for (const col of cols) r.appendChild(el("td", "num", fmtValue(col.key, e)));
-    tb.appendChild(r);
+    const name = el("a", null, row.handle || "—");
+    name.href = "#/profile/" + (row.handle || "");
+    whoWrap.append(name);
+    who.append(whoWrap);
+    tr.append(who);
+    const rate = row.values && row.values.judge !== undefined ? row.values.judge / 10000 : null;
+    tr.append(el("td", "num", rate === null ? "—" : rate.toFixed(2) + "%"));
+    const bytes = row.values && row.values.bytes;
+    tr.append(el("td", "num", bytes ? Math.round(bytes / 1024) + " KB" : "—"));
+    table.append(tr);
   }
-  table.appendChild(tb);
-  root.appendChild(table);
-  if (entries.length > 50) {
-    root.appendChild(el("p", "count", "Showing the top 50 of " + entries.length + "."));
-  }
+  wrap.append(table);
+  return wrap;
 }
 
-export async function profileView(root, handle) {
-  const p = await getProfile(handle);
-  root.replaceChildren();
+// ---- Profile: public account, record and entries. ----
+export function profileView(p) {
+  const wrap = el("div");
   const head = el("div", "profile-head");
   if (p.image) {
     const img = document.createElement("img");
-    img.className = "avatar";
-    img.src = p.image;
+    img.setAttribute("crossorigin", "anonymous");
+    img.src = avatarUrl(p.image);
     img.alt = "";
-    img.crossOrigin = "anonymous";
-    head.appendChild(img);
+    img.onerror = () => img.remove();
+    head.append(img);
   }
-  const names = el("div");
-  names.appendChild(el("h1", null, p.display_name || p.handle));
-  names.appendChild(el("p", "sub", "@" + p.handle + (p.github_login ? " · GitHub " + p.github_login : "") + " · joined " + new Date(p.joined_at).toLocaleDateString()));
-  head.appendChild(names);
-  root.appendChild(head);
-  if (p.bio) root.appendChild(el("p", null, p.bio));
+  const nameBox = el("div");
+  nameBox.append(el("h1", null, p.display_name || p.handle));
+  if (p.bio) nameBox.append(el("p", "bio", p.bio));
+  nameBox.append(el("p", "sub", "@" + p.handle + " · joined " + fmtDate(p.joined_at)));
+  head.append(nameBox);
+  wrap.append(head);
 
   const rec = p.record || {};
-  const kv = el("dl", "kv");
-  for (const [label, value] of [
-    ["Entered", rec.competitions_entered],
-    ["Placed", rec.competitions_placed],
-    ["Won", rec.competitions_won],
-    ["Best place", rec.best_placement],
-    ["Prize money", rec.prize_usd != null ? money(rec.prize_usd) : null],
-  ]) {
-    const cell = el("div");
-    cell.appendChild(el("dt", null, label));
-    cell.appendChild(el("dd", null, value == null ? "—" : String(value)));
-    kv.appendChild(cell);
-  }
-  root.appendChild(kv);
+  const facts = el("div", "facts");
+  const fact = (label, value) => {
+    const f = el("div", "fact");
+    f.append(el("span", null, label), el("b", null, value));
+    return f;
+  };
+  facts.append(
+    fact("Entered", String(rec.competitions_entered ?? 0)),
+    fact("Placed", String(rec.competitions_placed ?? 0)),
+    fact("Won", String(rec.competitions_won ?? 0)),
+    fact("Prize money", money(rec.prize_usd)),
+  );
+  wrap.append(facts);
 
-  const sols = p.solutions || [];
-  root.appendChild(el("h2", null, "Entries (" + sols.length + ")"));
-  if (!sols.length) {
-    root.appendChild(el("p", "loading", "No entries yet."));
-    return;
+  const solutions = p.solutions || [];
+  wrap.append(el("h2", null, "Entries (" + solutions.length + ")"));
+  if (!solutions.length) {
+    wrap.append(el("p", "sub", "No entries yet."));
+    return wrap;
   }
-  const table = el("table");
-  const thead = el("thead");
-  const tr = el("tr");
-  for (const h of ["Entry", "Bounty", "Score", "Place", "Prize"]) tr.appendChild(el("th", h === "Entry" || h === "Bounty" ? null : "num", h));
-  thead.appendChild(tr);
-  table.appendChild(thead);
-  const tb = el("tbody");
-  for (const s of sols) {
-    const r = el("tr");
-    r.appendChild(el("td", null, s.title || "—"));
-    const b = el("td");
-    if (s.competition) b.appendChild(link("#/bounty/" + s.competition.slug, s.competition.title));
-    r.appendChild(b);
-    r.appendChild(el("td", "num", s.score && s.score.display ? (parseFloat(s.score.display) / 10000).toFixed(2) + "%" : "—"));
-    r.appendChild(el("td", "num", s.placement == null ? "—" : String(s.placement)));
-    r.appendChild(el("td", "num", s.prize_usd == null ? "—" : money(s.prize_usd)));
-    tb.appendChild(r);
+  const list = el("div", "entry-list");
+  for (const s of solutions) {
+    const card = el("article", "card");
+    card.append(el("h3", null, s.title || "Untitled entry"));
+    const meta = el("div", "meta");
+    if (s.competition) {
+      const cl = el("a", null, s.competition.title || s.competition.slug);
+      cl.href = "#/bounty/" + s.competition.slug;
+      meta.append(cl);
+      meta.append(el("span", null, fmtDate(s.competition.deadline)));
+    }
+    if (s.placement) meta.append(el("span", "chip", "Placed #" + s.placement));
+    if (s.prize_usd) meta.append(el("span", "pot", money(s.prize_usd)));
+    card.append(meta);
+    list.append(card);
   }
-  table.appendChild(tb);
-  root.appendChild(table);
+  wrap.append(list);
+  return wrap;
 }

@@ -3,26 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="A fast, light make.fun frontend: the live bounty board, bounty pages, leaderboards and public profiles.">
-<title>make.fun — bounties, fast</title>
+<title>make.fun board</title>
+<meta name="description" content="Fast read-only frontend for make.fun: live bounty board, bounty pages, leaderboards and profiles.">
 <link rel="stylesheet" href="./style.css">
-<script type="module" src="./app.js"></script>
 </head>
 <body>
-<a class="skip" href="#view">Skip to content</a>
 <header class="top">
-  <div class="wrap top-in">
-    <a class="brand" href="#/" aria-label="make.fun home">make<span>.fun</span> <em>board</em></a>
-    <nav aria-label="Sections">
-      <a href="#/">Bounties</a>
-      <a href="#/bounty/makefun-frontend-01">This bounty</a>
-      <a href="#/profile/sipemburu23">Profile</a>
-    </nav>
-  </div>
+  <a class="brand" href="#/">make<span>.</span>fun board</a>
+  <nav>
+    <a href="#/">Board</a>
+    <a href="#/bounty/makefun-frontend-01">This bounty</a>
+  </nav>
 </header>
-<main id="view" class="wrap" aria-live="polite"></main>
-<footer class="wrap foot">
-  <p>Unofficial, read-only. Data: <a href="https://make.fun">make.fun</a> public API. No sign-in, no writes, no trackers.</p>
+<main id="view" aria-live="polite"></main>
+<footer class="foot">
+  <span>Read-only client for <a href="https://make.fun">make.fun</a> public API. No sign-in, no writes.</span>
+  <span id="foot-note"></span>
 </footer>
+<script type="module" src="./app.js"></script>
 </body>
 </html>
