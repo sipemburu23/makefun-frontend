@@ -1,31 +1,22 @@
-// make.fun board — the program that hands this entry in.
-//
-// It copies app/ and screenshots/ from beside this file to the output
-// directory and writes /output/dossier.json with buildDossier from the
-// vendored make.fun library. Every path is resolved from import.meta.url,
-// so it works no matter which directory the grader runs it from.
-//
-// Outside the grader, MAKEFUN_OUTPUT_DIR stands in for /output:
-//   MAKEFUN_OUTPUT_DIR=out node main.ts
-//
-// The run is deterministic: the same repository always writes the same
-// bytes, so the grader's two runs match byte for byte. The program uses
-// only the Node standard library plus the vendored dossier library, and
-// it never touches the network.
-
+// Trifold entrypoint (Node 22, standard library only): it hands the app in by
+// copying app/ and screenshots/ from beside this file into the output directory
+// and writing /output/dossier.json with the kit's vendored dossier library.
+// Every path is resolved from this file's own location, so the program works
+// from any working directory; outside the grader, MAKEFUN_OUTPUT_DIR stands
+// in for /output, e.g. `MAKEFUN_OUTPUT_DIR=out node main.ts`.
 import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildDossier } from "./vendor/makefun-frontend.ts";
 
-const here = fileURLToPath(new URL(".", import.meta.url));
+const root = dirname(fileURLToPath(import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
 
 mkdirSync(out, { recursive: true });
-cpSync(join(here, "app"), join(out, "app"), { recursive: true });
+cpSync(join(root, "app"), join(out, "app"), { recursive: true });
 mkdirSync(join(out, "screenshots"), { recursive: true });
-if (existsSync(join(here, "screenshots"))) {
-  cpSync(join(here, "screenshots"), join(out, "screenshots"), { recursive: true });
+if (existsSync(join(root, "screenshots"))) {
+  cpSync(join(root, "screenshots"), join(out, "screenshots"), { recursive: true });
 }
 
 writeFileSync(
