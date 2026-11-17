@@ -1,79 +1,131 @@
-// Read-only client for make.fun's public API (GET https://make.fun/api/...).
-// Every answer is cached in memory and in sessionStorage with its ETag, and
-// revalidated with If-None-Match, so a revisit inside the same minute costs
-// one cheap 304 instead of a full download. Nothing here ever writes.
+// Cached, ETag-revalidated reads of make.fun's public API. Read-only: GET only.
+export const API = "https://make.fun/api";
+export const ORIGIN = "https://make.fun";
 
-const BASE = "https://make.fun/api";
-const mem = new Map();
-
-function cacheKey(url) {
-  return "mf:" + url;
+// Per-view request accounting, shown in the cache line at the top of every view.
+export const stats = { requests: 0, unchanged: 0, memory: 0, updatedAt: 0 };
+export function statsReset() {
+  stats.requests = 0;
+  stats.unchanged = 0;
+  stats.memory = 0;
+  stats.updatedAt = Date.now();
 }
 
-function readCache(url) {
-  const hit = mem.get(url);
-  if (hit) return hit;
+const mem = new Map();
+
+function stored(url) {
   try {
-    const raw = sessionStorage.getItem(cacheKey(url));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    mem.set(url, parsed);
-    return parsed;
+    const raw = sessionStorage.getItem("tf:" + url);
+    return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
 }
 
-function writeCache(url, entry) {
-  mem.set(url, entry);
+function store(url, etag, body) {
   try {
-    sessionStorage.setItem(cacheKey(url), JSON.stringify(entry));
+    sessionStorage.setItem("tf:" + url, JSON.stringify({ etag, body, at: Date.now() }));
   } catch {
-    // Storage full or private mode: the in-memory copy still works.
+    // Storage full or unavailable: the memory cache still serves this session.
   }
 }
 
-// Fetch one JSON answer, revalidating a cached copy when there is one.
-// A 304 keeps the cached body; any other failure falls back to it too,
-// so a flaky minute still shows the last good data instead of an error.
-export async function fetchJson(path) {
-  const url = BASE + path;
-  const cached = readCache(url);
-  const headers = { Accept: "application/json" };
-  if (cached && cached.etag) headers["If-None-Match"] = cached.etag;
+// fetchCached: one GET with If-None-Match revalidation. A 304 reuses the stored
+// body and counts as unchanged; a memory hit costs no request at all.
+export async function fetchCached(url) {
+  if (mem.has(url)) {
+    stats.memory++;
+    return mem.get(url);
+  }
+  const prev = stored(url);
+  const headers = {};
+  if (prev && prev.etag) headers["If-None-Match"] = prev.etag;
   let res;
   try {
     res = await fetch(url, { headers });
   } catch (err) {
-    if (cached) return cached.body;
+    if (prev) {
+      stats.memory++;
+      mem.set(url, prev.body);
+      return prev.body;
+    }
     throw err;
   }
-  if (res.status === 304 && cached) return cached.body;
-  if (!res.ok) {
-    if (cached) return cached.body;
-    throw new Error("make.fun API " + res.status + " for " + path);
+  stats.requests++;
+  stats.updatedAt = Date.now();
+  if (res.status === 304 && prev) {
+    stats.unchanged++;
+    mem.set(url, prev.body);
+    return prev.body;
   }
   const body = await res.json();
-  writeCache(url, { etag: res.headers.get("ETag"), body });
+  if (!res.ok) throw new Error("API " + res.status + " for " + url);
+  mem.set(url, body);
+  store(url, res.headers.get("ETag"), body);
   return body;
 }
 
-// The board: one call, up to 100 bounties, newest first from the API.
-export function listCompetitions() {
-  return fetchJson("/competitions?limit=100");
+export function boardList() {
+  return fetchCached(API + "/competitions");
 }
 
-export function getCompetition(slug) {
-  return fetchJson("/competitions/" + encodeURIComponent(slug));
+export function bountyBoard(slug, limit) {
+  return fetchCached(API + "/competitions/" + slug + "/leaderboard" + (limit ? "?limit=" + limit : ""));
 }
 
-// Leaderboard rows come back ranked; limit keeps the payload small.
-export function getLeaderboard(slug, limit) {
-  return fetchJson(
-    "/competitions/" + encodeURIComponent(slug) + "/leaderboard?limit=" + (limit || 50),
-  );
+// Full bounty detail: the board list already carries the pot and rewards, but
+// only the detail carries the phases (deadline, results-by) and the opened date.
+export function bountyDetail(slug) {
+  return fetchCached(API + "/competitions/" + slug);
 }
 
-export function getProfile(handle) {
-  return fetchJson("/profiles/" + encodeURIComponent(handle));
+export function profileOf(handle) {
+  return fetchCached(API + "/profiles/" + encodeURIComponent(handle));
+}
+
+// Root a root-relative API image path (avatars, entry images) on make.fun.
+export function absImg(path) {
+  if (!path) return "";
+  return path.startsWith("/") ? ORIGIN + path : path;
+}
+
+export function money(n) {
+  const v = Number(n) || 0;
+  return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+export function fmtInt(n) {
+  return (Number(n) || 0).toLocaleString("en-US");
+}
+
+export function timeLeft(deadline) {
+  const ms = Date.parse(deadline) - Date.now();
+  if (ms <= 0) return "closed";
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + "h " + (m % 60) + "m";
+  return Math.floor(h / 24) + "d " + (h % 24) + "h";
+}
+
+// A bounty still takes entries when its deadline is in the future, whatever
+// its status says (a past-deadline bounty may read open until results publish).
+export function isOpen(c) {
+  return Date.parse(c.deadline) > Date.now();
+}
+
+export function feeText(c) {
+  const f = Number(c.entryFeeUsd);
+  return !f ? "Free" : money(f);
+}
+
+// Live prize now for a place, from the bounty's own rewardsNow table.
+export function prizeNow(bounty, place) {
+  const rows = bounty && bounty.rewardsNow;
+  if (Array.isArray(rows)) {
+    const r = rows.find((x) => x.place === place);
+    if (r) return Number(r.amountUsd);
+  }
+  const base = bounty && bounty.rewards ? Number(bounty.rewards[String(place)] || 0) : 0;
+  return base;
 }
