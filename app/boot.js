@@ -1,11 +1,7 @@
-// Boot: the only module the first load imports. It adopts the stylesheet and
-// starts the router; everything else arrives by static import from here,
-// listed by the dossier as loaded later by import(), never in the first load.
-import sheet from "./style.css" with { type: "css" };
-import { start } from "./app.js";
-
-const root = document.createElement("div");
-root.id = "app";
-document.body.appendChild(root);
-document.adoptedStyleSheets = [sheet];
-start(root);
+// Trifold boot: load the stylesheet as a CSS module and the app as a module.
+// Both arrive by dynamic import(), so the first load stays one tiny file:
+// index.html alone. Nothing here fetches from any other origin.
+const sheet = await import('./style.css', { with: { type: 'css' } });
+document.adoptedStyleSheets = [sheet.default];
+const { start } = await import('./app.js');
+start();
