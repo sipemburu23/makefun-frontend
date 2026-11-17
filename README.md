@@ -1,55 +1,36 @@
-# make.fun board — a fast, light make.fun frontend
-
 [![make.fun · makefun-frontend-01](https://make.fun/badge/makefun-frontend-01.svg)](https://make.fun/bounty/makefun-frontend-01?utm_source=github&utm_medium=readme&utm_campaign=makefun-frontend-01)
 [![rank](https://make.fun/badge/makefun-frontend-01/sipemburu23/makefun-frontend/rank.svg)](https://make.fun/bounty/makefun-frontend-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=makefun-frontend-01)
 [![reward](https://make.fun/badge/makefun-frontend-01/sipemburu23/makefun-frontend/reward.svg)](https://make.fun/bounty/makefun-frontend-01?utm_source=github&utm_medium=readme&utm_campaign=makefun-frontend-01)
 
-An unofficial, read-only frontend for [make.fun](https://make.fun), built
-for the makefun-frontend-01 bounty ($500). Static files, no build step,
-no framework, no webfonts, no trackers: one small stylesheet and three
-small ES modules, served by any static file server with `app/` at its
-root.
+# make.fun board — fast read-only frontend
 
-## The four surfaces
+A fast, read-only web client for [make.fun](https://make.fun), built from static files with no build step and no framework. It reads only make.fun's public API (`GET https://make.fun/api/...`), caches answers with ETags, and renders four surfaces, each with its own URL.
 
-Each is reachable by a link and by its own URL (hash routes):
+## Surfaces
 
-- `#/` — the bounty board: live bounties with each one's live pot
-  (reward + entry fees), entry fee where one is set, deadline and time
-  left, and entry count. Filter by text, sort by deadline, reward or
-  entries. Open rows are enriched with each bounty's live pot after the
-  first paint.
-- `#/bounty/<slug>` — a bounty's page: summary, live pot, entry fee,
-  deadline, entries, the rewards table with the live pot split (base +
-  fee share), and the full description with its rules.
-- `#/bounty/<slug>/leaderboard` — that bounty's leaderboard: rank,
-  entrant (linked to their profile), entry, and the judge win rate with
-  its interval, validity and size.
-- `#/profile/<handle>` — an account's public profile: avatar, record
-  (entered / placed / won / best place / prize money) and their entries
-  with scores, places and prizes.
+- **Board** — `#/`: every live bounty with its reward and live pot, entry fee, time left and entry count. Open bounties first, soonest deadline first.
+- **Bounty page** — `#/bounty/<slug>`: summary, rules, rewards table with the live pot, dates and status. Whether it still takes entries is judged by its deadline, not its status alone.
+- **Leaderboard** — `#/bounty/<slug>/leaderboard`: ranked entries with judge win rate and dossier size.
+- **Profile** — `#/profile/<handle>`: public account, record (entered / placed / won / prize money) and entries.
 
 ## How it works
 
-- Read-only: `GET` requests to `https://make.fun/api/...` only. No
-  sign-in, no writes. Avatars and entry images use
-  `crossorigin="anonymous"`.
-- Caching: API answers are cached in memory and `sessionStorage` and
-  revalidated with `If-None-Match` (the API sends ETags bound to the
-  minute), so a second view or a reload usually costs a 304, not a
-  download. Countdowns refresh in place every 30 seconds without
-  rebuilding the page.
-- `window.__shotReady` is `false` while a route loads and `true` once
-  its data has rendered.
-- A bounty past its deadline is shown as closed from the deadline,
-  not from its status alone.
+- `app/index.html` — the shell; loads one stylesheet and one module.
+- `app/api.js` — fetch layer: ETag / `If-None-Match` revalidation plus a `sessionStorage` cache, so a revisit inside the same minute costs a 304, and a failed fetch falls back to the last good answer.
+- `app/views.js` — all four surfaces, built with DOM methods and `textContent` (no `innerHTML` from API data). Long lists are capped at 50 rows; countdowns are spans updated in place once a minute, never a page rebuild.
+- `app/app.js` — hash router; sets `window.__shotReady` to `false` while a route loads and `true` once it has rendered.
+- `main.ts` — copies `app/` and `screenshots/` to the output directory and writes `dossier.json` with `buildDossier` from `vendor/makefun-frontend.ts`. All paths resolve from `import.meta.url`, so it runs from any working directory.
 
-## Run it locally
+First load is five files (HTML + CSS + three small modules), no webfonts, no framework.
+
+## Run it
 
 ```sh
+# serve app/ on http://localhost:8080 (any static server works)
 cd app && python3 -m http.server 8080
-# open http://localhost:8080/
 ```
+
+Then open http://localhost:8080 in a desktop browser.
 
 ## Hand it in
 
@@ -57,15 +38,6 @@ cd app && python3 -m http.server 8080
 mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 ```
 
-`main.ts` copies `app/` and `screenshots/` into the output directory
-and writes `dossier.json` with `buildDossier` from
-`vendor/makefun-frontend.ts` (the kit's copy, unchanged). All paths are
-resolved from the script's own directory, so it works from any working
-directory. Two runs write identical bytes.
+## License
 
-## Screenshots
-
-`screenshots/` holds three real renders of the running app on live
-make.fun data (1280×800): `1-board.jpg` (the cover), `2-bounty.jpg`,
-`3-leaderboard.jpg`. See `shots.json` for each shot's route and
-viewport.
+MIT — see [LICENSE](LICENSE).
